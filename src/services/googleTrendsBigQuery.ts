@@ -41,7 +41,8 @@ export async function fetchTrendsFromBigQuery(
   input: FetchTrendsFromBigQueryInput
 ): Promise<TrendItem[]> {
   const options: BigQueryOptions = {
-    projectId: input.projectId
+    projectId: input.projectId,
+    location: "US"
   };
   if (input.credentialsJson) {
     try {

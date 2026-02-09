@@ -9,9 +9,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "start:daily": "node dist/scripts/run-with-shopify-token.js",
     "dev": "tsx src/index.ts",
     "shopify-auth": "tsx src/scripts/shopify-oauth.ts",
     "shopify-token": "tsx src/scripts/shopify-token.ts",
+    "daily": "tsx src/scripts/run-with-shopify-token.ts",
+    "daily:dev": "tsx src/scripts/run-with-shopify-token.ts --dev",
     "migrate": "tsx src/scripts/migrate.ts",
     "pins": "tsx src/scripts/list-pins.ts",
     "canva-oauth": "tsx src/scripts/canva-oauth.ts",
