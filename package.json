@@ -1,0 +1,33 @@
+{
+  "name": "boxncase-content-automation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "shopify-auth": "tsx src/scripts/shopify-oauth.ts",
+    "shopify-token": "tsx src/scripts/shopify-token.ts",
+    "migrate": "tsx src/scripts/migrate.ts",
+    "pins": "tsx src/scripts/list-pins.ts",
+    "canva-oauth": "tsx src/scripts/canva-oauth.ts",
+    "canva-list-templates": "tsx src/scripts/canva-list-templates.ts"
+  },
+  "dependencies": {
+    "@google-cloud/bigquery": "^8.1.1",
+    "dotenv": "^16.4.5",
+    "open": "^11.0.0",
+    "pg": "^8.11.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/pg": "^8.16.0",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.5"
+  }
+}

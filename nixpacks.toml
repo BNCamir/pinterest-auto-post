@@ -1,0 +1,9 @@
+# Railway/Nixpacks: Node 18, explicit build and start
+[phases.setup]
+nixPkgs = ["nodejs_18"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npm start"

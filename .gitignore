@@ -1,0 +1,17 @@
+# Env and secrets (never commit)
+.env
+.env.local
+.canva-refresh-token
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+
+# Dependencies and build
+node_modules/
+dist/
+
+# Logs and OS
+*.log
+.DS_Store
+Thumbs.db
