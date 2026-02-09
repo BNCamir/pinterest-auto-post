@@ -69,7 +69,10 @@ DRY_RUN=true npm run dev
    In the app service → Variables, set all vars from `.env.example`. For Railway you must use `GCP_SERVICE_ACCOUNT_JSON` (paste the full GCP service account JSON string); the app reads `PORT` automatically.
 
 4. **Build and start**  
-   Railway will run `npm install`, `npm run build`, and `npm start`. The app listens on `PORT` and runs the content pipeline once on startup. To run on a schedule, use [Railway Cron](https://docs.railway.com/cron-jobs) to redeploy or call an endpoint, or run the app as a cron job service.
+   Railway will run `npm install`, `npm run build`, and the start command. The repo includes **Option A: daily cron** via `railway.json`:
+   - **Start command:** `npm run start:daily` (fetches a fresh Shopify token, then runs the pipeline once and exits).
+   - **Cron schedule:** `0 12 * * *` (every day at 12:00 UTC). Times are in UTC.
+   In the Railway dashboard, open your service → **Settings** → set **Cron Schedule** to `0 12 * * *` (or your preferred [crontab](https://docs.railway.com/cron-jobs#crontab-expressions), e.g. `0 8 * * *` for 8:00 UTC). Ensure **Start Command** is `npm run start:daily`. The service will run on that schedule, execute the pipeline, and exit.
 
 ## Project layout
 
