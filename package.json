@@ -13,6 +13,7 @@
     "dev": "tsx src/index.ts",
     "shopify-auth": "tsx src/scripts/shopify-oauth.ts",
     "shopify-token": "tsx src/scripts/shopify-token.ts",
+    "shopify-list-blogs": "tsx src/scripts/shopify-list-blogs.ts",
     "daily": "tsx src/scripts/run-with-shopify-token.ts",
     "daily:dev": "tsx src/scripts/run-with-shopify-token.ts --dev",
     "migrate": "tsx src/scripts/migrate.ts",

@@ -64,7 +64,8 @@ export async function fetchTrendsFromBigQuery(
     LIMIT ${Math.min(Number(input.topLimit) || 25, 100)}
   `;
 
-  const [topRows] = await bigquery.query({ query: topQuery });
+  const queryOptions = { query: topQuery, location: "US" as const };
+  const [topRows] = await bigquery.query(queryOptions);
   const topByTerm = new Map<string, { score: number; rank: number }>();
   for (const row of topRows as { term: string; score: number; rank: number }[]) {
     if (row.term) topByTerm.set(row.term, { score: row.score ?? 0, rank: row.rank ?? 0 });
@@ -78,7 +79,7 @@ export async function fetchTrendsFromBigQuery(
       WHERE refresh_date = (SELECT MAX(refresh_date) FROM ${US_TOP_RISING})
       LIMIT 25
     `;
-    const [risingRows] = await bigquery.query({ query: risingQuery });
+    const [risingRows] = await bigquery.query({ query: risingQuery, location: "US" });
     for (const row of risingRows as { term: string }[]) {
       if (row.term) risingTerms.add(row.term);
     }

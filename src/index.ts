@@ -4,7 +4,7 @@ import { loadConfig } from "./config.js";
 import { log } from "./logger.js";
 import { runPipeline } from "./workflow/orchestrator.js";
 
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = process.env.PORT !== undefined && process.env.PORT !== "" ? Number(process.env.PORT) : 3000;
 
 let configError: string | null = null;
 

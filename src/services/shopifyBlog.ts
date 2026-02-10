@@ -77,6 +77,11 @@ export async function createBlogArticle(input: {
       body: JSON.stringify(body, null, 2),
       error: errorMessage
     });
+    if (errorMessage.includes("404")) {
+      console.error(
+        "Tip: 404 usually means the blog ID is wrong for this store. Run: npx tsx src/scripts/shopify-list-blogs.ts to list valid blog IDs."
+      );
+    }
     throw err;
   }
 

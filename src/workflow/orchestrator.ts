@@ -1,19 +1,22 @@
 import { join } from "path";
+import { existsSync } from "fs";
 import type { AppConfig } from "../config.js";
 import { withClient } from "../db/index.js";
 import * as db from "../db/queries.js";
 import { log } from "../logger.js";
 import { fetchTrendsFromBigQuery } from "../services/googleTrendsBigQuery.js";
 import { fetchTrendingKeywords } from "../services/mcpGoogleTrends.js";
+import { fetchFoodDrinkTrendsFromSearchApi } from "../services/searchApiGoogleTrends.js";
 import { fetchBoxNCaseContext, extractContextKeywords } from "../services/mcpBoxNCase.js";
 import { generateContent } from "../services/openaiContent.js";
-import { generatePinImage } from "../services/geminiImage.js";
+import { generatePinImage, improveImageWithGemini, addTextToLocalTemplate } from "../services/geminiImage.js";
+import { getLocalTemplatePath } from "../services/localTemplates.js";
 import { createPinFromTemplate } from "../services/canvaPin.js";
 import { createPinFromTemplated } from "../services/templated.js";
 import { getShopifyAccessToken } from "../services/shopifyToken.js";
 import { createBlogArticle } from "../services/shopifyBlog.js";
 import { createPin as createPinterestPin } from "../services/pinterestPin.js";
-import { createPinViaGetlate, uploadImageToGetlate } from "../services/getlatePin.js";
+import { createPinViaGetlate, reuploadImageUrlToGetlate, uploadImageToGetlate } from "../services/getlatePin.js";
 
 const INDUSTRY_KEYWORDS = [
   "food",
@@ -31,6 +34,22 @@ const INDUSTRY_KEYWORDS = [
 ];
 
 const MAX_TOPIC_CANDIDATES = 10;
+
+/** Pick template ID and optional page index. Multi-page: use TEMPLATED_PAGE_COUNT and rotate by runId. */
+function getTemplatedOptions(config: AppConfig, runId: number): { templateId: string; pageIndex?: number } {
+  const templateId =
+    config.TEMPLATED_TEMPLATE_IDS?.trim()
+      ? (() => {
+          const list = config.TEMPLATED_TEMPLATE_IDS!.split(",").map((s) => s.trim()).filter(Boolean);
+          if (list.length > 0) return list[runId % list.length]!;
+          return config.TEMPLATED_TEMPLATE_ID?.trim();
+        })()
+      : config.TEMPLATED_TEMPLATE_ID?.trim();
+  if (!templateId) throw new Error("Set TEMPLATED_TEMPLATE_ID or TEMPLATED_TEMPLATE_IDS");
+  const pageCount = config.TEMPLATED_PAGE_COUNT;
+  const pageIndex = pageCount != null && pageCount > 0 ? runId % pageCount : undefined;
+  return { templateId, pageIndex };
+}
 
 function scoreAndSelectTopicCandidates(
   trends: { keyword: string; score?: number; rising?: boolean }[],
@@ -99,13 +118,21 @@ export async function runPipeline(config: AppConfig, scheduledTime: Date): Promi
         }).catch((err) => {
           throw new Error(`Google Trends BigQuery failed: ${(err as Error).message}`);
         })
-        : await fetchTrendingKeywords({
-          url: config.GOOGLE_TRENDS_MCP_URL!,
-          token: config.GOOGLE_TRENDS_MCP_TOKEN,
-          timeoutMs: 15000
-        }).catch((err) => {
-          throw new Error(`Google Trends MCP failed: ${(err as Error).message}`);
-        });
+        : config.GOOGLE_TRENDS_SOURCE === "searchapi_food"
+          ? await fetchFoodDrinkTrendsFromSearchApi({
+            apiKey: config.SEARCHAPI_API_KEY!,
+            geo: "US",
+            timeoutMs: 15000
+          }).catch((err) => {
+            throw new Error(`SearchApi Food & Drink trends failed: ${(err as Error).message}`);
+          })
+          : await fetchTrendingKeywords({
+            url: config.GOOGLE_TRENDS_MCP_URL!,
+            token: config.GOOGLE_TRENDS_MCP_TOKEN,
+            timeoutMs: 15000
+          }).catch((err) => {
+            throw new Error(`Google Trends MCP failed: ${(err as Error).message}`);
+          });
     await runLog("topic_discovery", "info", `Fetched ${trends.length} trend items (source=${config.GOOGLE_TRENDS_SOURCE})`);
 
     const contextKeywords = config.BOXNCASE_MCP_URL?.trim()
@@ -121,7 +148,15 @@ export async function runPipeline(config: AppConfig, scheduledTime: Date): Promi
       : [];
     await runLog("topic_discovery", "info", `Context keywords: ${contextKeywords.length}`);
 
-    const candidates = scoreAndSelectTopicCandidates(trends, contextKeywords);
+    let candidates = scoreAndSelectTopicCandidates(trends, contextKeywords);
+    if (candidates.length === 0 && trends.length > 0) {
+      await runLog("topic_discovery", "info", "No industry match; using all trends as fallback for this run");
+      for (let i = 0; i < trends.length; i++) {
+        const primary = trends[i].keyword;
+        const supporting = trends.filter((_, j) => j !== i).slice(0, 5).map((t) => t.keyword);
+        candidates.push({ primary, supporting });
+      }
+    }
     if (candidates.length === 0) {
       await withClient(config.DATABASE_URL, (client) =>
         db.finalizeRun(client, runId, "failed", "No topic selected after scoring")
@@ -183,24 +218,128 @@ export async function runPipeline(config: AppConfig, scheduledTime: Date): Promi
 
       let imageResult: { imageDataBase64: string; mimeType: string } | undefined;
       let imageUrlForBlog: string | undefined;
+      let usedTemplatedForImage = false;
 
       if (useGetlate && !useCanva) {
-        imageResult = await generatePinImage({
-          apiUrl: config.GEMINI_IMAGE_API_URL!,
-          apiKey: config.GEMINI_API_KEY!,
-          model: config.GEMINI_IMAGE_MODEL!,
-          primaryKeyword: selected.primary,
-          brandName: config.BRAND_NAME
-        }).catch((err) => {
-          throw new Error(`Gemini image failed: ${(err as Error).message}`);
-        });
-        await runLog("pin_creative", "info", "Generated pin image");
-        imageUrlForBlog = await uploadImageToGetlate(
-          config.GETLATE_API_KEY!,
-          imageResult.imageDataBase64,
-          imageResult.mimeType ?? "image/png"
-        );
-        await runLog("pin_creative", "info", "Uploaded image to Getlate for blog and pin");
+        // Try local templates first (no initial Gemini image needed - templates already have food imagery)
+        const localTemplatePath = await getLocalTemplatePath(runId);
+        if (localTemplatePath) {
+          await runLog("pin_creative", "info", `Using local template: ${localTemplatePath}`);
+          try {
+            // Get logo path if available
+            const logoPath = join(process.cwd(), "assets", "logo.png");
+            const logoExists = existsSync(logoPath);
+            
+            const templateWithText = await addTextToLocalTemplate({
+              apiUrl: config.GEMINI_IMAGE_API_URL!,
+              apiKey: config.GEMINI_API_KEY!,
+              model: config.GEMINI_IMAGE_MODEL!,
+              templatePath: localTemplatePath,
+              headline: content.pinterest.headline,
+              brandName: config.BRAND_NAME,
+              logoPath: logoExists ? logoPath : undefined
+            });
+            imageUrlForBlog = await uploadImageToGetlate(
+              config.GETLATE_API_KEY!,
+              templateWithText.imageDataBase64,
+              templateWithText.mimeType ?? "image/png"
+            );
+            await runLog("pin_creative", "info", `Using local template with Gemini-added text: ${imageUrlForBlog}`);
+            usedTemplatedForImage = true; // Mark as using template
+          } catch (err) {
+            await runLog("pin_creative", "warn", `Local template failed (${(err as Error).message}), falling back to Templated.io or raw image`);
+          }
+        }
+
+        // Fallback: generate Gemini image only when not using local template
+        if (!usedTemplatedForImage) {
+          imageResult = await generatePinImage({
+            apiUrl: config.GEMINI_IMAGE_API_URL!,
+            apiKey: config.GEMINI_API_KEY!,
+            model: config.GEMINI_IMAGE_MODEL!,
+            primaryKeyword: selected.primary,
+            brandName: config.BRAND_NAME
+          }).catch((err) => {
+            throw new Error(`Gemini image failed: ${(err as Error).message}`);
+          });
+          await runLog("pin_creative", "info", "Generated pin image");
+          imageUrlForBlog = await uploadImageToGetlate(
+            config.GETLATE_API_KEY!,
+            imageResult.imageDataBase64,
+            imageResult.mimeType ?? "image/png"
+          );
+          await runLog("pin_creative", "info", "Uploaded image to Getlate for blog and pin");
+        }
+
+        // Fallback to Templated.io if local templates didn't work
+        if (!usedTemplatedForImage && useTemplated && imageUrlForBlog) {
+          const { templateId, pageIndex } = getTemplatedOptions(config, runId);
+          if (pageIndex !== undefined) {
+            await runLog("pin_creative", "info", `Using Templated template ${templateId}, page ${pageIndex + 1} of ${config.TEMPLATED_PAGE_COUNT} (runId ${runId} % ${config.TEMPLATED_PAGE_COUNT} = ${pageIndex})`);
+          } else {
+            await runLog("pin_creative", "warn", `Templated page rotation disabled (TEMPLATED_PAGE_COUNT not set). Using default page/all pages.`);
+          }
+          const templatedResult = await createPinFromTemplated({
+            apiKey: config.TEMPLATED_API_KEY!,
+            templateId,
+            imageUrl: imageUrlForBlog,
+            headline: content.pinterest.headline,
+            brandName: config.BRAND_NAME,
+            ...(pageIndex !== undefined && { pageIndex })
+          }).catch(async (err) => {
+            await runLog("pin_creative", "warn", `Templated.io failed (${(err as Error).message}), using raw image for blog and pin`);
+            return null;
+          });
+          if (templatedResult) {
+            usedTemplatedForImage = true;
+            await runLog("pin_creative", "info", `Templated image generated: ${templatedResult.renderUrl}`);
+            await runLog("pin_creative", "info", "Sending Templated image to Gemini for improvement...");
+            
+            // Improve the Templated image with Gemini
+            // Strategy: Recreate from scratch using original food image + headline (better than fixing broken template)
+            let improvedImage: { imageDataBase64: string; mimeType: string } | null = null;
+            try {
+              improvedImage = await improveImageWithGemini({
+                apiUrl: config.GEMINI_IMAGE_API_URL!,
+                apiKey: config.GEMINI_API_KEY!,
+                model: config.GEMINI_IMAGE_MODEL!,
+                imageUrl: templatedResult.renderUrl,
+                originalFoodImageUrl: imageUrlForBlog, // Use original Gemini food image to recreate
+                headline: content.pinterest.headline,
+                brandName: config.BRAND_NAME
+              });
+              await runLog("pin_creative", "info", "Gemini recreation successful, received clean pin image");
+            } catch (err) {
+              const errorMsg = (err as Error).message;
+              await runLog("pin_creative", "error", `Gemini image recreation FAILED: ${errorMsg}`);
+              console.error("[Gemini Recreation Error]", err);
+              // Continue to fallback below
+            }
+
+            if (improvedImage) {
+              // Upload improved image to Getlate
+              await runLog("pin_creative", "info", "Uploading Gemini-improved image to Getlate...");
+              imageUrlForBlog = await uploadImageToGetlate(
+                config.GETLATE_API_KEY!,
+                improvedImage.imageDataBase64,
+                improvedImage.mimeType ?? "image/png"
+              );
+              await runLog("pin_creative", "info", `Using Gemini-improved image for blog and pin: ${imageUrlForBlog}`);
+            } else {
+              // Fallback: re-upload Templated image to Getlate
+              await runLog("pin_creative", "warn", "FALLBACK: Using Templated image without Gemini improvement");
+              const sameImageUrl = await reuploadImageUrlToGetlate(
+                config.GETLATE_API_KEY!,
+                templatedResult.renderUrl
+              ).catch(async (err) => {
+                await runLog("pin_creative", "warn", `Re-upload Templated to Getlate failed (${(err as Error).message}), using Templated URL`);
+                return templatedResult.renderUrl;
+              });
+              imageUrlForBlog = sameImageUrl;
+              await runLog("pin_creative", "warn", `Using unimproved Templated image: ${imageUrlForBlog}`);
+            }
+          }
+        }
       }
 
       const shopifyAccessToken = await getShopifyAccessToken(config);
@@ -253,73 +392,46 @@ export async function runPipeline(config: AppConfig, scheduledTime: Date): Promi
 
       if (useGetlate) {
         await runLog("pin_creative", "info", "Using Getlate for Pinterest");
-        let usedTemplated = false;
-
-        if (useTemplated) {
-          const templatedResult = await createPinFromTemplated({
-            apiKey: config.TEMPLATED_API_KEY!,
-            templateId: config.TEMPLATED_TEMPLATE_ID!,
-            imageBase64: imageResult.imageDataBase64,
-            headline: content.pinterest.headline,
-            brandName: config.BRAND_NAME
-          }).catch(async (err) => {
-            await runLog("pin_creative", "warn", `Templated.io failed (${(err as Error).message}), falling back to raw Gemini image`);
-            return null;
-          });
-
-          if (templatedResult) {
-            usedTemplated = true;
-            assetId = await withClient(config.DATABASE_URL, (client) =>
-              db.createAsset(client, {
-                type: "templated_image",
-                provider: "templated",
-                storageUrl: templatedResult.renderUrl
-              })
-            );
-            pinResult = await createPinViaGetlate({
-              apiKey: config.GETLATE_API_KEY!,
-              accountId: config.GETLATE_PINTEREST_ACCOUNT_ID!,
-              boardId: config.PINTEREST_BOARD_ID!,
-              title: content.pinterest.headline,
-              description: content.pinterest.description,
-              link: shopifyResult.url,
-              imageUrl: templatedResult.renderUrl
-            }).catch((err) => {
-              throw new Error(`Getlate pin failed: ${(err as Error).message}`);
-            });
-          }
-        }
-
-        if (!usedTemplated) {
-          await runLog("pin_creative", "info", "Using Gemini image for pin (Templated skipped or failed)");
-          assetId = await withClient(config.DATABASE_URL, (client) =>
-            db.createAsset(client, {
-              type: "raw_image",
-              provider: "gemini",
-              storageUrl: imageUrlForBlog ?? "gemini-inline"
-            })
-          );
-          pinResult = await createPinViaGetlate({
-            apiKey: config.GETLATE_API_KEY!,
-            accountId: config.GETLATE_PINTEREST_ACCOUNT_ID!,
-            boardId: config.PINTEREST_BOARD_ID!,
-            title: content.pinterest.headline,
-            description: content.pinterest.description,
-            link: shopifyResult.url,
-            ...(imageUrlForBlog
-              ? { imageUrl: imageUrlForBlog }
-              : { imageBase64: imageResult.imageDataBase64, imageContentType: imageResult.mimeType ?? "image/png" })
-          }).catch((err) => {
-            throw new Error(`Getlate pin failed: ${(err as Error).message}`);
-          });
-        }
+        assetId = await withClient(config.DATABASE_URL, (client) =>
+          db.createAsset(client, {
+            type: usedTemplatedForImage ? "templated_image" : "raw_image",
+            provider: usedTemplatedForImage ? "templated" : "gemini",
+            storageUrl: imageUrlForBlog ?? "gemini-inline"
+          })
+        );
+        pinResult = await createPinViaGetlate({
+          apiKey: config.GETLATE_API_KEY!,
+          accountId: config.GETLATE_PINTEREST_ACCOUNT_ID!,
+          boardId: config.PINTEREST_BOARD_ID!,
+          title: content.pinterest.headline,
+          description: content.pinterest.description,
+          link: shopifyResult.url,
+          ...(imageUrlForBlog
+            ? { imageUrl: imageUrlForBlog }
+            : { imageBase64: imageResult!.imageDataBase64, imageContentType: imageResult!.mimeType ?? "image/png" })
+        }).catch((err) => {
+          throw new Error(`Getlate pin failed: ${(err as Error).message}`);
+        });
       } else if (useTemplated) {
+        const imageUrlForTemplated =
+          config.GETLATE_API_KEY?.trim()
+            ? await uploadImageToGetlate(
+                config.GETLATE_API_KEY!,
+                imageResult.imageDataBase64,
+                imageResult.mimeType ?? "image/png"
+              ).catch(() => null)
+            : null;
+        if (!imageUrlForTemplated) {
+          throw new Error("Templated.io needs image_url. Set GETLATE_API_KEY to upload the image and get a URL.");
+        }
+        const { templateId, pageIndex } = getTemplatedOptions(config, runId);
         const templatedResult = await createPinFromTemplated({
           apiKey: config.TEMPLATED_API_KEY!,
-          templateId: config.TEMPLATED_TEMPLATE_ID!,
-          imageBase64: imageResult.imageDataBase64,
+          templateId,
+          imageUrl: imageUrlForTemplated,
           headline: content.pinterest.headline,
-          brandName: config.BRAND_NAME
+          brandName: config.BRAND_NAME,
+          ...(pageIndex !== undefined && { pageIndex })
         }).catch((err) => {
           throw new Error(`Templated.io pin failed: ${(err as Error).message}`);
         });
