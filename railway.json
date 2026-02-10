@@ -5,6 +5,6 @@
   },
   "deploy": {
     "startCommand": "npm run start:daily",
-    "cronSchedule": "0 12 * * *"
+    "cronSchedule": "0 16 * * *"
   }
 }

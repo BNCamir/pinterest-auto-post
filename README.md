@@ -71,8 +71,8 @@ DRY_RUN=true npm run dev
 4. **Build and start**  
    Railway will run `npm install`, `npm run build`, and the start command. The repo includes **Option A: daily cron** via `railway.json`:
    - **Start command:** `npm run start:daily` (fetches a fresh Shopify token, then runs the pipeline once and exits).
-   - **Cron schedule:** `0 12 * * *` (every day at 12:00 UTC). Times are in UTC.
-   In the Railway dashboard, open your service → **Settings** → set **Cron Schedule** to `0 12 * * *` (or your preferred [crontab](https://docs.railway.com/cron-jobs#crontab-expressions), e.g. `0 8 * * *` for 8:00 UTC). Ensure **Start Command** is `npm run start:daily`. The service will run on that schedule, execute the pipeline, and exit.
+   - **Cron schedule:** `0 16 * * *` (every day at 11:00 AM EST / 16:00 UTC). Times are in UTC.
+   In the Railway dashboard, open your service → **Settings** → set **Cron Schedule** to `0 16 * * *` (or your preferred [crontab](https://docs.railway.com/cron-jobs#crontab-expressions)). Ensure **Start Command** is `npm run start:daily`. The service will run on that schedule, execute the pipeline, and exit.
 
 ## Project layout
 
