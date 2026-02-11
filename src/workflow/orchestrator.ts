@@ -374,7 +374,7 @@ export async function runPipeline(config: AppConfig, scheduledTime: Date): Promi
         })
       );
 
-      if (!imageResult) {
+      if (!imageUrlForBlog && !imageResult) {
         imageResult = await generatePinImage({
           apiUrl: config.GEMINI_IMAGE_API_URL!,
           apiKey: config.GEMINI_API_KEY!,
