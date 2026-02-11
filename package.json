@@ -19,7 +19,8 @@
     "migrate": "tsx src/scripts/migrate.ts",
     "pins": "tsx src/scripts/list-pins.ts",
     "canva-oauth": "tsx src/scripts/canva-oauth.ts",
-    "canva-list-templates": "tsx src/scripts/canva-list-templates.ts"
+    "canva-list-templates": "tsx src/scripts/canva-list-templates.ts",
+    "getlate-list-boards": "tsx src/scripts/getlate-list-pinterest-boards.ts"
   },
   "dependencies": {
     "@google-cloud/bigquery": "^8.1.1",

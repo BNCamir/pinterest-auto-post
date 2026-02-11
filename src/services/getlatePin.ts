@@ -223,3 +223,26 @@ export async function createPinViaGetlate(input: CreatePinViaGetlateInput): Prom
     title: sanitized.title
   };
 }
+
+/**
+ * List Pinterest boards for a Getlate account.
+ * Use the returned board `id` (long numeric) as PINTEREST_BOARD_ID – not the Getlate account ID.
+ */
+export async function listPinterestBoards(apiKey: string, accountId: string): Promise<{ id: string; name?: string }[]> {
+  const res = await fetch(`${GETLATE_API_BASE}/accounts/${encodeURIComponent(accountId)}/pinterest-boards`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${apiKey}` }
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Getlate list Pinterest boards failed: ${res.status} ${text}`);
+  }
+  let data: { boards?: { id: string; name?: string }[] };
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Getlate response not JSON: ${text.slice(0, 200)}`);
+  }
+  const boards = data.boards ?? [];
+  return boards.map((b) => ({ id: b.id, name: b.name }));
+}
