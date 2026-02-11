@@ -413,6 +413,7 @@ export async function runPipeline(config: AppConfig, scheduledTime: Date): Promi
           throw new Error(`Getlate pin failed: ${(err as Error).message}`);
         });
       } else if (useTemplated) {
+        if (!imageResult) throw new Error("Templated path requires generated image");
         const imageUrlForTemplated =
           config.GETLATE_API_KEY?.trim()
             ? await uploadImageToGetlate(
@@ -455,6 +456,7 @@ export async function runPipeline(config: AppConfig, scheduledTime: Date): Promi
           throw new Error(`Pinterest post failed: ${(err as Error).message}`);
         });
       } else {
+        if (!imageResult) throw new Error("Direct Pinterest path requires generated image");
         await runLog("pin_creative", "info", "Skipping Canva (no template/key); using Gemini image for pin");
         assetId = await withClient(config.DATABASE_URL, (client) =>
           db.createAsset(client, {
