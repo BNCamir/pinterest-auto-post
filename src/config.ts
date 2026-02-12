@@ -28,7 +28,11 @@ const configSchema = z.object({
   OPENAI_MODEL: z.string().min(1),
   GEMINI_IMAGE_API_URL: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
-  GEMINI_IMAGE_MODEL: z.string().optional(),
+  /** Default to supported model; gemini-2.0-flash-exp is deprecated. */
+  GEMINI_IMAGE_MODEL: z
+    .string()
+    .optional()
+    .transform((v) => (v === "gemini-2.0-flash-exp" ? "gemini-2.5-flash-image" : v)),
   CANVA_API_BASE_URL: z.string().optional(),
   CANVA_API_KEY: z.string().optional(),
   CANVA_TEMPLATE_ID: z.string().optional(),
