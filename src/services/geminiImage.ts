@@ -1,5 +1,54 @@
+import { readFile } from "fs/promises";
 import { requestJson } from "../http.js";
 import { getLocalTemplateBase64 } from "./localTemplates.js";
+import sharp from "sharp";
+
+/** Remove consecutive duplicate words so the headline is never repeated (e.g. "the the" -> "the"). */
+export function sanitizeHeadline(headline: string): string {
+  const words = headline.trim().split(/\s+/);
+  const out: string[] = [];
+  let prev = "";
+  for (const w of words) {
+    if (w.toLowerCase() !== prev.toLowerCase()) {
+      out.push(w);
+      prev = w;
+    }
+  }
+  return out.join(" ").trim() || headline.trim();
+}
+
+/**
+ * Composite the logo image onto the bottom-right of the pin image.
+ * Keeps the logo pixel-perfect (no AI redrawing).
+ */
+async function compositeLogoOntoImage(
+  imageBuffer: Buffer,
+  imageMime: string,
+  logoPath: string
+): Promise<{ buffer: Buffer; mimeType: string }> {
+  const logoBuffer = await readFile(logoPath);
+  const img = sharp(imageBuffer);
+  const meta = await img.metadata();
+  const width = meta.width ?? 1000;
+  const height = meta.height ?? 1500;
+  const padding = Math.round(Math.min(width, height) * 0.03);
+  const logoMaxHeight = Math.round(height * 0.12);
+  const logoMaxWidth = Math.round(width * 0.25);
+  const resizedLogo = await sharp(logoBuffer)
+    .resize(logoMaxWidth, logoMaxHeight, { fit: "inside", withoutEnlargement: true })
+    .png()
+    .toBuffer();
+  const logoMeta = await sharp(resizedLogo).metadata();
+  const lw = logoMeta.width ?? 0;
+  const lh = logoMeta.height ?? 0;
+  const left = width - lw - padding;
+  const top = height - lh - padding;
+  const out = await img
+    .composite([{ input: resizedLogo, left, top }])
+    .png()
+    .toBuffer();
+  return { buffer: out, mimeType: "image/png" };
+}
 
 export async function generatePinImage(input: {
   apiUrl: string;
@@ -260,8 +309,9 @@ The final image must look like a professionally designed Pinterest pin, not a br
 }
 
 /**
- * Add headline and brand logo to a local template image using Gemini.
- * This uses the template as-is and adds text overlays with the actual logo.
+ * Add headline (and optionally brand logo) to a local template image.
+ * - Headline: added by Gemini with exact text (sanitized, no duplicate words).
+ * - Logo: when logoPath is set, we composite the real logo image in code so it is never redrawn by AI (avoids misspellings like "Casse").
  */
 export async function addTextToLocalTemplate(input: {
   apiUrl: string;
@@ -273,79 +323,38 @@ export async function addTextToLocalTemplate(input: {
   logoPath?: string;
 }): Promise<{ imageDataBase64: string; mimeType: string }> {
   console.error(`[Local Template] Loading template from ${input.templatePath}...`);
-  
-  // Read the local template file
-  const { data: templateBase64, mimeType: templateMimeType } = await getLocalTemplateBase64(input.templatePath);
-  
-  // Read logo if provided
-  let logoBase64: string | null = null;
-  let logoMimeType: string = "image/png";
-  if (input.logoPath) {
-    try {
-      const logoData = await getLocalTemplateBase64(input.logoPath);
-      logoBase64 = logoData.data;
-      logoMimeType = logoData.mimeType;
-      console.error(`[Local Template] Loaded logo from ${input.logoPath}`);
-    } catch (err) {
-      console.error(`[Local Template] Failed to load logo: ${(err as Error).message}`);
-    }
+  const headline = sanitizeHeadline(input.headline);
+  if (headline !== input.headline) {
+    console.error(`[Local Template] Sanitized headline (removed duplicate words): "${input.headline}" -> "${headline}"`);
   }
-  
-  const prompt = `Add text and branding to this Pinterest pin template image to make it look natural and professionally designed, NOT AI-generated.
 
-CRITICAL - DO NOT ADD: No globe icons, no website links, no URLs, no "www" or .com text anywhere. Only the headline and the logo.
+  const { data: templateBase64, mimeType: templateMimeType } = await getLocalTemplateBase64(input.templatePath);
+  const useLogoComposite = !!input.logoPath;
 
-DESIGN REQUIREMENTS:
-- Keep the template's overall design and layout exactly as shown
-- Add the headline text "${input.headline}" with VARIED, CREATIVE FONTS:
-  * Use a mix of font styles (serif, sans-serif, script, display fonts)
-  * Vary font sizes and weights for visual interest
-  * Use different fonts for different words/phrases if it enhances readability
-  * Make it look like a real designer created it, not AI
-  * Position text where it naturally fits in the template (match template's text placement)
-- ${logoBase64 ? `Add the provided LOGO IMAGE (not text) in the bottom corner as a watermark/brand mark. Size it appropriately - visible but not overpowering.` : input.brandName ? `Add "${input.brandName}" as subtle text branding in the corner` : ""}
-- Make the design look NATURAL and HAND-CRAFTED:
-  * Avoid overly perfect alignment - slight variations are more natural
-  * Use realistic text shadows, outlines, or effects that match the template style
-  * Ensure text integrates seamlessly with the template (not floating or disconnected)
-  * Match the template's color scheme and aesthetic
-- Do NOT add overlapping or duplicate text
-- Do NOT add any globe icons, website links, URLs, or "www" text anywhere in the image - no link graphics, no URL text
-- Keep the vertical Pinterest format
-- The final result should look like a real Pinterest pin created by a professional designer, not an AI-generated image
+  const prompt = `Add ONLY the headline text to this Pinterest pin template. Make it look natural and professionally designed, NOT AI-generated.
 
-Make it look authentic and well-designed, matching the quality of top Pinterest pins. Only the headline and logo/brand - no links or globe icons.`;
+CRITICAL RULES:
+- Do NOT add any brand name, logo, watermark, or website/URL/globe icons. Only the headline.
+- Use this EXACT headline text with no repeated words and no changes: "${headline}"
+- Keep the template's design and layout. Place the headline where text naturally fits (match template's text placement).
+- Use varied, creative fonts (mix of serif, sans-serif, script) so it looks hand-crafted, not AI. One instance of each word only.
+- No overlapping or duplicate text. No links, no .com, no www.
+- Vertical Pinterest format. Result must look like a professional designer made it.`;
 
-  // Build request parts array with template and optionally logo
   const requestParts: Array<{ text?: string; inlineData?: { data: string; mimeType: string } }> = [
     { text: "Pinterest pin template to add text to:" },
-    { inlineData: { data: templateBase64, mimeType: templateMimeType } }
+    { inlineData: { data: templateBase64, mimeType: templateMimeType } },
+    { text: prompt }
   ];
-  
-  if (logoBase64) {
-    requestParts.push(
-      { text: "Brand logo to add as watermark:" },
-      { inlineData: { data: logoBase64, mimeType: logoMimeType } }
-    );
-  }
-  
-  requestParts.push({ text: prompt });
 
   const body = {
-    contents: [
-      {
-        parts: requestParts
-      }
-    ],
-    generationConfig: {
-      responseModalities: ["IMAGE"]
-    }
+    contents: [{ parts: requestParts }],
+    generationConfig: { responseModalities: ["IMAGE"] }
   };
 
   const base = input.apiUrl.replace(/\/$/, "");
   const url = `${base}/models/${input.model}:generateContent?key=${input.apiKey}`;
-  console.error(`[Local Template] Sending template to Gemini to add headline and brand...`);
-  
+  console.error(`[Local Template] Sending template to Gemini (headline only; logo will be composited separately).`);
   type Part = { inlineData?: { data: string; mimeType: string }; text?: string };
   const response = await requestJson<{
     candidates?: { content?: { parts?: Part[] } }[];
@@ -356,22 +365,26 @@ Make it look authentic and well-designed, matching the quality of top Pinterest 
     timeoutMs: 90000
   });
 
-  console.error(`[Local Template] Received response from Gemini`);
   const parts = response.candidates?.[0]?.content?.parts;
   const imagePart = parts?.find((p: Part) => p.inlineData?.data);
   if (!imagePart?.inlineData?.data) {
-    const blockReason = (response as { candidates?: { finishReason?: string; safetyRatings?: unknown }[] }).candidates?.[0]?.finishReason;
-    const textParts = parts?.filter((p: Part) => p.text).map((p: Part) => p.text) ?? [];
-    console.error("[Local Template] ERROR - No image in response:", {
-      blockReason,
-      textParts
-    });
+    const blockReason = (response as { candidates?: { finishReason?: string }[] }).candidates?.[0]?.finishReason;
     throw new Error(`Gemini failed to add text to template${blockReason ? ` (finishReason: ${blockReason})` : ""}`);
   }
-  
-  console.error(`[Local Template] SUCCESS - Template with text added`);
+
+  let imageBuffer = Buffer.from(imagePart.inlineData.data, "base64");
+  let mimeType = imagePart.inlineData.mimeType ?? "image/png";
+
+  if (useLogoComposite) {
+    console.error(`[Local Template] Compositing logo from ${input.logoPath} (pixel-perfect, no AI redraw).`);
+    const composited = await compositeLogoOntoImage(imageBuffer, mimeType, input.logoPath!);
+    imageBuffer = composited.buffer;
+    mimeType = composited.mimeType;
+  }
+
+  console.error(`[Local Template] SUCCESS - Template with headline${useLogoComposite ? " and logo" : ""} ready.`);
   return {
-    imageDataBase64: imagePart.inlineData.data,
-    mimeType: imagePart.inlineData.mimeType ?? "image/png"
+    imageDataBase64: imageBuffer.toString("base64"),
+    mimeType
   };
 }

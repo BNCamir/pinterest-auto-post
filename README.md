@@ -37,7 +37,9 @@ For **Railway**: set `GCP_SERVICE_ACCOUNT_JSON` to the full service account JSON
    - **Required (rest of pipeline):** `OPENAI_*`, `GEMINI_*`, `SHOPIFY_*`, and either Templated.io (`TEMPLATED_*`) and/or Getlate (`GETLATE_*`) and Pinterest (`PINTEREST_BOARD_ID` etc.) — see table above.
 
 4. **Google Trends**  
-   Default: `GOOGLE_TRENDS_SOURCE=bigquery` uses the [Google Trends BigQuery dataset](https://support.google.com/trends/answer/12764470) (Top 25 + Top 25 Rising, US). Set `GOOGLE_TRENDS_SOURCE=mcp` and `GOOGLE_TRENDS_MCP_URL` to use an MCP endpoint instead.
+   - **Food & Drink–relevant articles:** set `GOOGLE_TRENDS_SOURCE=searchapi_food` and `SEARCHAPI_API_KEY` (SearchApi) so topics come from the Food & Drink category. Without this, BigQuery returns general trends (sports, weather, etc.) and articles may be off-topic.  
+   - **BigQuery:** `GOOGLE_TRENDS_SOURCE=bigquery` uses the [Google Trends BigQuery dataset](https://support.google.com/trends/answer/12764470) (Top 25 + Top 25 Rising, US).  
+   - **MCP:** set `GOOGLE_TRENDS_SOURCE=mcp` and `GOOGLE_TRENDS_MCP_URL` to use an MCP endpoint.
 
 5. **APIs**  
    Shopify: Admin API 2024-01. Pinterest: Content API v5 or Getlate. Pin creative: [Templated.io](https://templated.io). Gemini: image-capable model.
@@ -66,7 +68,7 @@ DRY_RUN=true npm run dev
    ```
 
 3. **Set environment variables**  
-   In the app service → Variables, set all vars from `.env.example`. For Railway you must use `GCP_SERVICE_ACCOUNT_JSON` (paste the full GCP service account JSON string); the app reads `PORT` automatically.
+   In the app service → Variables, set all vars from `.env.example`. For food-relevant articles set `GOOGLE_TRENDS_SOURCE=searchapi_food` and `SEARCHAPI_API_KEY`. If using BigQuery, set `GCP_SERVICE_ACCOUNT_JSON` (paste the full JSON); the app reads `PORT` automatically. After changing code, push to your repo so Railway rebuilds and runs the latest version.
 
 4. **Build and start**  
    Railway will run `npm install`, `npm run build`, and the start command. The repo includes **Option A: daily cron** via `railway.json`:

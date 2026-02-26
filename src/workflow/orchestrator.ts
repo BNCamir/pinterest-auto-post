@@ -9,7 +9,7 @@ import { fetchTrendingKeywords } from "../services/mcpGoogleTrends.js";
 import { fetchFoodDrinkTrendsFromSearchApi } from "../services/searchApiGoogleTrends.js";
 import { fetchBoxNCaseContext, extractContextKeywords } from "../services/mcpBoxNCase.js";
 import { generateContent } from "../services/openaiContent.js";
-import { generatePinImage, improveImageWithGemini, addTextToLocalTemplate } from "../services/geminiImage.js";
+import { generatePinImage, improveImageWithGemini, addTextToLocalTemplate, sanitizeHeadline } from "../services/geminiImage.js";
 import { getLocalTemplatePath } from "../services/localTemplates.js";
 import { createPinFromTemplate } from "../services/canvaPin.js";
 import { createPinFromTemplated } from "../services/templated.js";
@@ -208,6 +208,7 @@ export async function runPipeline(config: AppConfig, scheduledTime: Date): Promi
       throw new Error(`OpenAI content failed: ${(err as Error).message}`);
     });
     await runLog("content_generation", "info", "Generated blog and Pinterest copy");
+    content.pinterest.headline = sanitizeHeadline(content.pinterest.headline);
 
     if (!config.DRY_RUN) {
       const useCanva = false; // DEPRECATED
