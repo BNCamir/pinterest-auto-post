@@ -378,7 +378,7 @@ CRITICAL RULES:
   if (useLogoComposite) {
     console.error(`[Local Template] Compositing logo from ${input.logoPath} (pixel-perfect, no AI redraw).`);
     const composited = await compositeLogoOntoImage(imageBuffer, mimeType, input.logoPath!);
-    imageBuffer = composited.buffer;
+    imageBuffer = Buffer.from(composited.buffer);
     mimeType = composited.mimeType;
   }
 
