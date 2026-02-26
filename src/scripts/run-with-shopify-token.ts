@@ -48,14 +48,15 @@ async function main(): Promise<void> {
   const token = await fetchShopifyToken();
   console.log("Token received. Starting pipeline...\n");
 
-  const env = { ...process.env, SHOPIFY_ACCESS_TOKEN: token };
+  const env = { ...process.env, SHOPIFY_ACCESS_TOKEN: token, PORT: "0" };
   const isDev = process.argv.includes("--dev");
   const cmd = isDev ? "tsx" : "node";
   const script = isDev
     ? join(__dirname, "..", "index.ts")
     : join(__dirname, "..", "index.js");
 
-  const child = spawn(cmd, [script], {
+  const scriptQuoted = script.includes(" ") ? `"${script}"` : script;
+  const child = spawn(`${cmd} ${scriptQuoted}`, [], {
     env,
     stdio: "inherit",
     shell: true

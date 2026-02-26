@@ -1,0 +1,24 @@
+# Required for posting (blog + Pinterest via Getlate)
+# Copy any missing lines into your .env and fill in your real values.
+
+# Getlate (required for Pinterest posting from this app)
+GETLATE_API_KEY=your_getlate_api_key
+GETLATE_PINTEREST_ACCOUNT_ID=your_pinterest_account_id_in_getlate
+
+# Pinterest board (Getlate needs this to create the pin)
+PINTEREST_BOARD_ID=your_board_id
+
+# Shopify (blog – we already set these)
+SHOPIFY_ADMIN_API_BASE_URL=https://couture-candies.myshopify.com/admin/api/2024-01
+SHOPIFY_BLOG_ID=50080481325
+SHOPIFY_BLOG_HANDLE=news
+
+# Templated (optional but used for pin + blog image)
+TEMPLATED_API_KEY=your_templated_key
+TEMPLATED_TEMPLATE_ID=f156a4d0-cb94-4777-8434-77c935b46c70
+TEMPLATED_PAGE_COUNT=10
+
+# Gemini (pin image)
+GEMINI_IMAGE_API_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_API_KEY=your_gemini_key
+GEMINI_IMAGE_MODEL=gemini-2.5-flash-image
