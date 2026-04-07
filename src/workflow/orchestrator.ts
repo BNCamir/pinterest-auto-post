@@ -103,6 +103,8 @@ export async function runPipeline(config: AppConfig, scheduledTime: Date): Promi
   };
 
   try {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
     if (config.DRY_RUN) {
       await runLog("orchestrator", "info", "DRY_RUN enabled; skipping external calls");
     }
@@ -119,13 +121,27 @@ export async function runPipeline(config: AppConfig, scheduledTime: Date): Promi
           throw new Error(`Google Trends BigQuery failed: ${(err as Error).message}`);
         })
         : config.GOOGLE_TRENDS_SOURCE === "searchapi_food"
-          ? await fetchFoodDrinkTrendsFromSearchApi({
-            apiKey: config.SEARCHAPI_API_KEY!,
-            geo: "US",
-            timeoutMs: 15000
-          }).catch((err) => {
-            throw new Error(`SearchApi Food & Drink trends failed: ${(err as Error).message}`);
-          })
+          ? await (async () => {
+            // SearchApi can be slow/variable from hosted environments; retry a couple times.
+            const attempts = 3;
+            let lastErr: unknown;
+            for (let i = 0; i < attempts; i++) {
+              try {
+                return await fetchFoodDrinkTrendsFromSearchApi({
+                  apiKey: config.SEARCHAPI_API_KEY!,
+                  geo: "US",
+                  timeoutMs: 45000
+                });
+              } catch (err) {
+                lastErr = err;
+                const msg = (err as Error).message || String(err);
+                await runLog("topic_discovery", "warn", `SearchApi attempt ${i + 1}/${attempts} failed: ${msg}`);
+                // exponential backoff: 1s, 2s, 4s
+                await sleep(1000 * Math.pow(2, i));
+              }
+            }
+            throw new Error(`SearchApi Food & Drink trends failed: ${(lastErr as Error)?.message ?? String(lastErr)}`);
+          })()
           : await fetchTrendingKeywords({
             url: config.GOOGLE_TRENDS_MCP_URL!,
             token: config.GOOGLE_TRENDS_MCP_TOKEN,
