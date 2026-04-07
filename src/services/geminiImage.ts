@@ -50,6 +50,87 @@ async function compositeLogoOntoImage(
   return { buffer: out, mimeType: "image/png" };
 }
 
+function escapeXml(input: string): string {
+  return input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function wrapWords(text: string, maxCharsPerLine: number, maxLines: number): string[] {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = "";
+  for (const w of words) {
+    const next = current ? `${current} ${w}` : w;
+    if (next.length <= maxCharsPerLine) {
+      current = next;
+      continue;
+    }
+    if (current) lines.push(current);
+    current = w;
+    if (lines.length >= maxLines - 1) break;
+  }
+  if (current && lines.length < maxLines) lines.push(current);
+  return lines;
+}
+
+async function renderHeadlineOnTemplate(input: {
+  templatePath: string;
+  headline: string;
+}): Promise<{ buffer: Buffer; mimeType: string }> {
+  const templateBuffer = await readFile(input.templatePath);
+  const img = sharp(templateBuffer);
+  const meta = await img.metadata();
+  const width = meta.width ?? 1000;
+  const height = meta.height ?? 1500;
+
+  // Heuristic "safe" headline area for these templates.
+  const x = Math.round(width * 0.06);
+  const y = Math.round(height * 0.06);
+  const boxW = Math.round(width * 0.62);
+
+  const clean = sanitizeHeadline(input.headline).replace(/\s+/g, " ").trim();
+  let lines = wrapWords(clean, 22, 2);
+  if (lines.join(" ").length < clean.length) lines = wrapWords(clean, 18, 3);
+
+  const longest = Math.max(...lines.map((l) => l.length), 1);
+  const approxCharPx = Math.max(18, Math.floor(boxW / Math.max(longest, 10)));
+  const fontSize = Math.max(54, Math.min(118, Math.floor(approxCharPx * 2.2)));
+  const lineHeight = Math.round(fontSize * 1.15);
+
+  const textYStart = y + Math.round(fontSize * 1.0);
+  const fill = "#ffffff";
+  const stroke = "rgba(0,0,0,0.35)";
+  const strokeWidth = Math.max(6, Math.round(fontSize * 0.08));
+
+  const svgLines = lines
+    .map((l, i) => {
+      const yy = textYStart + i * lineHeight;
+      return `<text x="${x}" y="${yy}" font-family="DejaVu Sans, Arial, sans-serif" font-size="${fontSize}" font-weight="800" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" paint-order="stroke" style="letter-spacing:0.5px">${escapeXml(l)}</text>`;
+    })
+    .join("\n");
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="rgba(0,0,0,0.35)"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    ${svgLines}
+  </g>
+</svg>`;
+
+  const out = await img
+    .composite([{ input: Buffer.from(svg), left: 0, top: 0 }])
+    .png()
+    .toBuffer();
+  return { buffer: out, mimeType: "image/png" };
+}
+
 export async function generatePinImage(input: {
   apiUrl: string;
   apiKey: string;
@@ -310,7 +391,7 @@ The final image must look like a professionally designed Pinterest pin, not a br
 
 /**
  * Add headline (and optionally brand logo) to a local template image.
- * - Headline: added by Gemini with exact text (sanitized, no duplicate words).
+ * - Headline: rendered in code (deterministic; avoids AI overlaps/duplication).
  * - Logo: when logoPath is set, we composite the real logo image in code so it is never redrawn by AI (avoids misspellings like "Casse").
  */
 export async function addTextToLocalTemplate(input: {
@@ -328,52 +409,12 @@ export async function addTextToLocalTemplate(input: {
     console.error(`[Local Template] Sanitized headline (removed duplicate words): "${input.headline}" -> "${headline}"`);
   }
 
-  const { data: templateBase64, mimeType: templateMimeType } = await getLocalTemplateBase64(input.templatePath);
   const useLogoComposite = !!input.logoPath;
-
-  const prompt = `Add ONLY the headline text to this Pinterest pin template. Make it look natural and professionally designed, NOT AI-generated.
-
-CRITICAL RULES:
-- Do NOT add any brand name, logo, watermark, or website/URL/globe icons. Only the headline.
-- Use this EXACT headline text with no repeated words and no changes: "${headline}"
-- Keep the template's design and layout. Place the headline where text naturally fits (match template's text placement).
-- Use varied, creative fonts (mix of serif, sans-serif, script) so it looks hand-crafted, not AI. One instance of each word only.
-- No overlapping or duplicate text. No links, no .com, no www.
-- Vertical Pinterest format. Result must look like a professional designer made it.`;
-
-  const requestParts: Array<{ text?: string; inlineData?: { data: string; mimeType: string } }> = [
-    { text: "Pinterest pin template to add text to:" },
-    { inlineData: { data: templateBase64, mimeType: templateMimeType } },
-    { text: prompt }
-  ];
-
-  const body = {
-    contents: [{ parts: requestParts }],
-    generationConfig: { responseModalities: ["IMAGE"] }
-  };
-
-  const base = input.apiUrl.replace(/\/$/, "");
-  const url = `${base}/models/${input.model}:generateContent?key=${input.apiKey}`;
-  console.error(`[Local Template] Sending template to Gemini (headline only; logo will be composited separately).`);
-  type Part = { inlineData?: { data: string; mimeType: string }; text?: string };
-  const response = await requestJson<{
-    candidates?: { content?: { parts?: Part[] } }[];
-  }>(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    timeoutMs: 90000
+  console.error(`[Local Template] Rendering headline in code (no AI text overlay).`);
+  let { buffer: imageBuffer, mimeType } = await renderHeadlineOnTemplate({
+    templatePath: input.templatePath,
+    headline
   });
-
-  const parts = response.candidates?.[0]?.content?.parts;
-  const imagePart = parts?.find((p: Part) => p.inlineData?.data);
-  if (!imagePart?.inlineData?.data) {
-    const blockReason = (response as { candidates?: { finishReason?: string }[] }).candidates?.[0]?.finishReason;
-    throw new Error(`Gemini failed to add text to template${blockReason ? ` (finishReason: ${blockReason})` : ""}`);
-  }
-
-  let imageBuffer = Buffer.from(imagePart.inlineData.data, "base64");
-  let mimeType = imagePart.inlineData.mimeType ?? "image/png";
 
   if (useLogoComposite) {
     console.error(`[Local Template] Compositing logo from ${input.logoPath} (pixel-perfect, no AI redraw).`);
