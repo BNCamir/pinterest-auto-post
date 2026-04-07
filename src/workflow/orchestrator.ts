@@ -164,7 +164,15 @@ export async function runPipeline(config: AppConfig, scheduledTime: Date): Promi
       : [];
     await runLog("topic_discovery", "info", `Context keywords: ${contextKeywords.length}`);
 
-    let candidates = scoreAndSelectTopicCandidates(trends, contextKeywords);
+    // For SearchApi Food & Drink, the whole trend list is already food-related.
+    // Don't over-filter to only strings containing "food" etc. or we get stuck on a couple reused topics.
+    let candidates =
+      config.GOOGLE_TRENDS_SOURCE === "searchapi_food"
+        ? trends.slice(0, MAX_TOPIC_CANDIDATES).map((t, i) => ({
+          primary: t.keyword,
+          supporting: trends.filter((_, j) => j !== i).slice(0, 5).map((x) => x.keyword)
+        }))
+        : scoreAndSelectTopicCandidates(trends, contextKeywords);
     if (candidates.length === 0 && trends.length > 0) {
       await runLog("topic_discovery", "info", "No industry match; using all trends as fallback for this run");
       for (let i = 0; i < trends.length; i++) {
