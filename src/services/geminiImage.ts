@@ -147,7 +147,7 @@ export async function generatePinImage(input: {
   brandName: string;
   aspectRatio?: "1000:1500" | "1000:1800";
 }): Promise<{ imageDataBase64: string; mimeType: string }> {
-  const prompt = `Generate a single vertical Pinterest pin image (no text in the image). 
+  const prompt = `Generate a single vertical Pinterest pin image (no text in the image).
 
 REQUIREMENTS:
 - MUST be a food or drink photo (appetizing, professional, high-quality)
@@ -157,6 +157,7 @@ REQUIREMENTS:
 - No fake brands or logos
 - Natural lighting, clean composition
 - Food should be the main focus (e.g., delicious meals, beverages, snacks, ingredients, cooking scenes)
+- The food photo should match this topic/food keyword as closely as possible: "${input.primaryKeyword}"
 
 The image should always be food/drink themed - focus on creating an appealing food or beverage image that would work well as a Pinterest pin background. Output only the image.`;
 
@@ -191,6 +192,78 @@ The image should always be food/drink themed - focus on creating an appealing fo
       rawPartsCount: parts?.length ?? 0
     });
     throw new Error(`Gemini did not return image data${blockReason ? ` (finishReason: ${blockReason})` : ""}`);
+  }
+  return {
+    imageDataBase64: imagePart.inlineData.data,
+    mimeType: imagePart.inlineData.mimeType ?? "image/png"
+  };
+}
+
+async function recreatePinUsingTemplateStyle(input: {
+  apiUrl: string;
+  apiKey: string;
+  model: string;
+  templatePath: string;
+  foodPhotoBase64: string;
+  foodPhotoMimeType: string;
+  headline: string;
+}): Promise<{ imageDataBase64: string; mimeType: string }> {
+  const { data: templateBase64, mimeType: templateMimeType } = await getLocalTemplateBase64(input.templatePath);
+
+  const cleanHeadline = sanitizeHeadline(input.headline).replace(/\\s+/g, " ").trim();
+  const prompt = `Recreate a high-quality Pinterest pin that looks MAN-MADE and professionally designed.
+
+You are given:
+1) A TEMPLATE IMAGE to use as style/layout inspiration (it may contain placeholder junk like random squares, fake text, or website placeholders).
+2) A FOOD PHOTO to use as the main hero image/background.
+
+CRITICAL REQUIREMENTS:
+- Output ONE clean vertical Pinterest pin image.
+- Use the FOOD PHOTO as the hero/background (make it look appetizing and real).
+- Use the TEMPLATE only for inspiration: match its layout, spacing, and vibe, but FIX everything.
+- Remove/DO NOT INCLUDE any placeholder elements from the template:
+  * no random squares
+  * no lorem/garbage text
+  * no globe icons
+  * no URLs, no \"www\", no \".com\", no website bars
+- Add the headline EXACTLY once (no overlap, no duplicates): "${cleanHeadline}"
+- Make the typography look like a real designer: clean hierarchy, readable, balanced spacing.
+- Avoid obvious AI artifacts: keep edges crisp, no warped letters, no doubled strokes, no messy overlaps.
+
+Return only the final image.`;
+
+  const body = {
+    contents: [
+      {
+        parts: [
+          { text: "Template style inspiration:" },
+          { inlineData: { data: templateBase64, mimeType: templateMimeType } },
+          { text: "Food photo to use as the hero image:" },
+          { inlineData: { data: input.foodPhotoBase64, mimeType: input.foodPhotoMimeType } },
+          { text: prompt }
+        ]
+      }
+    ],
+    generationConfig: { responseModalities: ["IMAGE"] }
+  };
+
+  const base = input.apiUrl.replace(/\/$/, "");
+  const url = `${base}/models/${input.model}:generateContent?key=${input.apiKey}`;
+  type Part = { inlineData?: { data: string; mimeType: string }; text?: string };
+  const response = await requestJson<{
+    candidates?: { content?: { parts?: Part[] } }[];
+  }>(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    timeoutMs: 120000
+  });
+
+  const parts = response.candidates?.[0]?.content?.parts;
+  const imagePart = parts?.find((p: Part) => p.inlineData?.data);
+  if (!imagePart?.inlineData?.data) {
+    const blockReason = (response as { candidates?: { finishReason?: string }[] }).candidates?.[0]?.finishReason;
+    throw new Error(`Gemini template recreation failed${blockReason ? ` (finishReason: ${blockReason})` : ""}`);
   }
   return {
     imageDataBase64: imagePart.inlineData.data,
@@ -418,11 +491,38 @@ export async function addTextToLocalTemplate(input: {
   }
 
   const useLogoComposite = !!input.logoPath;
-  console.error(`[Local Template] Rendering headline in code (no AI text overlay).`);
-  let { buffer: imageBuffer, mimeType } = await renderHeadlineOnTemplate({
-    templatePath: input.templatePath,
-    headline
-  });
+  // Prefer Gemini "recreate" using template as inspiration + a topic-matching food photo.
+  // This avoids baked-in placeholder junk (www.website.com, globe icons, random squares) and mismatched photos.
+  let imageBuffer: Buffer;
+  let mimeType: string;
+  try {
+    console.error(`[Local Template] Generating topic-matching food photo for template recreation...`);
+    const food = await generatePinImage({
+      apiUrl: input.apiUrl,
+      apiKey: input.apiKey,
+      model: input.model,
+      primaryKeyword: input.brandName ? `${headline} ${input.brandName}` : headline,
+      brandName: input.brandName ?? "BoxNCase"
+    });
+    console.error(`[Local Template] Recreating pin using template style (Gemini)...`);
+    const recreated = await recreatePinUsingTemplateStyle({
+      apiUrl: input.apiUrl,
+      apiKey: input.apiKey,
+      model: input.model,
+      templatePath: input.templatePath,
+      foodPhotoBase64: food.imageDataBase64,
+      foodPhotoMimeType: food.mimeType ?? "image/png",
+      headline
+    });
+    imageBuffer = Buffer.from(recreated.imageDataBase64, "base64");
+    mimeType = recreated.mimeType ?? "image/png";
+  } catch (err) {
+    console.error(`[Local Template] Gemini template recreation failed; falling back to deterministic text overlay. ${(err as Error).message}`);
+    console.error(`[Local Template] Rendering headline in code (fallback).`);
+    const rendered = await renderHeadlineOnTemplate({ templatePath: input.templatePath, headline });
+    imageBuffer = rendered.buffer;
+    mimeType = rendered.mimeType;
+  }
 
   if (useLogoComposite) {
     console.error(`[Local Template] Compositing logo from ${input.logoPath} (pixel-perfect, no AI redraw).`);
