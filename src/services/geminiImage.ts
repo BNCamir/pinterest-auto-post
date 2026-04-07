@@ -90,7 +90,7 @@ async function renderHeadlineOnTemplate(input: {
   // Heuristic "safe" headline area for these templates.
   const x = Math.round(width * 0.06);
   const y = Math.round(height * 0.06);
-  const boxW = Math.round(width * 0.62);
+  const boxW = Math.round(width * 0.64);
 
   const clean = sanitizeHeadline(input.headline).replace(/\s+/g, " ").trim();
   let lines = wrapWords(clean, 22, 2);
@@ -102,6 +102,13 @@ async function renderHeadlineOnTemplate(input: {
   const lineHeight = Math.round(fontSize * 1.15);
 
   const textYStart = y + Math.round(fontSize * 1.0);
+  // Panel behind headline to cover template artifacts (e.g., placeholder squares) and prevent visual clash.
+  const panelPadX = Math.round(fontSize * 0.55);
+  const panelPadY = Math.round(fontSize * 0.45);
+  const panelX = Math.max(0, x - panelPadX);
+  const panelY = Math.max(0, y - panelPadY);
+  const panelW = Math.min(width, boxW + panelPadX * 2);
+  const panelH = Math.min(height, (lines.length * lineHeight) + panelPadY * 2 + Math.round(fontSize * 0.6));
   const fill = "#ffffff";
   const stroke = "rgba(0,0,0,0.35)";
   const strokeWidth = Math.max(6, Math.round(fontSize * 0.08));
@@ -119,6 +126,7 @@ async function renderHeadlineOnTemplate(input: {
       <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="rgba(0,0,0,0.35)"/>
     </filter>
   </defs>
+  <rect x="${panelX}" y="${panelY}" width="${panelW}" height="${panelH}" rx="${Math.round(fontSize * 0.35)}" ry="${Math.round(fontSize * 0.35)}" fill="rgba(0,0,0,0.42)"/>
   <g filter="url(#shadow)">
     ${svgLines}
   </g>
